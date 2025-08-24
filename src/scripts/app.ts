@@ -6,9 +6,7 @@ export class MainApp {
     public static inst: MainApp;
 
     public app: PIXI.Application;
-    /**
-     * code entry point, it is triggered by the window.onload event found at the bottom of this class
-     */
+
     public constructor () {
         MainApp.inst = this;
 
@@ -23,14 +21,12 @@ export class MainApp {
         document.body.appendChild(this.app.view);
 
         this.app.stage.addChild(new GameScene(new Server()));
+
+        // 🔥 Hook PixiJS Devtools
+        (window as any).__PIXI_APP__ = this.app;
     }
 }
 
-
-/**
- * on the window event create the MainApp class
- * some people like to add this into a seperate .js file
- */
 window.onload = function () {
     new MainApp();
 };

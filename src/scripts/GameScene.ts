@@ -2,6 +2,12 @@ import * as PIXI from 'pixi.js';
 import { MainApp } from './app';
 import Server from './Server';
 
+enum GameState {
+    Idle = 'Idle',
+    Spinning = 'Spinning',
+    Resolving = 'Resolving',
+}
+
 const symbolTextures = {
     // '1' : null,
     // '2' : null,
@@ -16,7 +22,7 @@ const symbolTextures = {
 
 const symbolTypes = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'K'];
 export class GameScene extends PIXI.Container {
-    constructor (server: Server) {
+    constructor(server: Server) {
         super();
 
         /**
@@ -59,13 +65,19 @@ export class GameScene extends PIXI.Container {
     private _logoSprite: PIXI.Sprite;
     private _spinText: PIXI.Text;
 
-    public init (): void {
+    private _gameState: GameState = GameState.Idle;
+    private _boardContainer!: PIXI.Container;
+    private _boardSprites: PIXI.Sprite[] = [];
+    private _currentMatrix: string[] = [];
 
+    public init(): void {
+        // --- logo ---
         this.addChild(this._logoSprite);
         this._logoSprite.position.set(760 / 2, 100);
         this._logoSprite.anchor.set(0.5);
         this._logoSprite.scale.set(0.5);
 
+        // --- spin text ---
         const style = new PIXI.TextStyle({
             fontFamily: 'Arial',
             fontSize: 36,
@@ -87,45 +99,55 @@ export class GameScene extends PIXI.Container {
         this._spinText.y = MainApp.inst.app.screen.height - 200;
         this.addChild(this._spinText);
 
-        /**
-         * Enable interactive so we can click on this text
-         */
         this._spinText.interactive = true;
         this._spinText.buttonMode = true;
         this._spinText.addListener('pointerdown', this._startSpin.bind(this));
 
-        this._isInitialized = true;
+        // --- board container ---
+        this._boardContainer = new PIXI.Container();
+        this.addChild(this._boardContainer);
+        this._boardContainer.position = new PIXI.Point(800 / 2, 960 / 2);
 
-        /**
-         * DEMO: Temporary show a default board table
-         * TODO: we should split board table to small objects and initialize/manage them
-         */
-        const boardContainer = this.addChild(new PIXI.Container());
-        boardContainer.position = new PIXI.Point(800 / 2, 960 / 2);
         const boardWidth = GameScene.SYMBOL_WIDTH * GameScene.NUMBER_OF_REELS;
         const boardHeight = GameScene.SYMBOL_HEIGHT * GameScene.NUMBER_OF_ROWS;
+
+        // --- default board ---
         const defaultBoard = [
             'K', '3', '7', '6', '8',
             '4', '7', '6', '8', '5',
             '7', '6', '8', '5', '7',
             '6', '8', '5', '7', '2',
-            '8', '5', '7', '1', 'K'];
-        
-        defaultBoard.forEach((symbol, idx) => {
+            '8', '5', '7', '1', 'K'
+        ];
 
-            const reelId = Math.floor(idx / GameScene.NUMBER_OF_ROWS);
-            const symbolId = idx % GameScene.NUMBER_OF_ROWS;
+        this._boardSprites = [];
+        for (let idx = 0; idx < GameScene.NUMBER_OF_REELS * GameScene.NUMBER_OF_ROWS; idx++) {
+            const col = Math.floor(idx / GameScene.NUMBER_OF_ROWS);
+            const row = idx % GameScene.NUMBER_OF_ROWS;
 
-            const pos = new PIXI.Point(reelId * GameScene.SYMBOL_WIDTH - boardWidth / 2 + GameScene.SYMBOL_WIDTH / 2, symbolId * GameScene.SYMBOL_HEIGHT - boardHeight / 2);
-            const symbolSpr = new PIXI.Sprite(symbolTextures[symbol]);
-            symbolSpr.position = pos;
-            symbolSpr.anchor.set(0.5);
-            boardContainer.addChild(symbolSpr);
-        });
+            const x = col * GameScene.SYMBOL_WIDTH - boardWidth / 2 + GameScene.SYMBOL_WIDTH / 2;
+            const y = row * GameScene.SYMBOL_HEIGHT - boardHeight / 2 + GameScene.SYMBOL_HEIGHT / 2;
 
+            const spr = new PIXI.Sprite();
+            spr.anchor.set(0.5);
+            spr.position.set(x, y);
+
+            const sym = defaultBoard[idx];
+            if (symbolTextures[sym]) {
+                spr.texture = symbolTextures[sym];
+                spr.alpha = 1;
+            } else {
+                spr.alpha = 0;
+            }
+
+            this._boardContainer.addChild(spr);
+            this._boardSprites.push(spr);
+        }
+
+        this._isInitialized = true;
     }
 
-    public onUpdate (dtScalar: number) {
+    public onUpdate(dtScalar: number) {
         const dt = dtScalar / PIXI.settings.TARGET_FPMS / 1000;
         if (this._isInitialized) {
             /**
@@ -136,20 +158,34 @@ export class GameScene extends PIXI.Container {
         }
     }
 
-    private _startSpin (): void {
-        console.log(` >>> start spin`);
+    private _startSpin(): void {
+        if (this._gameState !== GameState.Idle) {
+            console.log('still in turn');
+            return;
+        }
+        console.log(`start turn`);
+        this._gameState = GameState.Spinning;
         this._server.requestSpinData();
     }
 
-    private _onSpinDataResponded (data: any): void {
-        console.log(` >>> received: ${data?.matrix}`);
+    private _onSpinDataResponded(data: any): void {
+        console.log(`received: ${data?.matrix}`);
         /**
          * Received data from server.
          * TODO: should proceed in client here to stop the spin or refill and show result.
          */
+        this._renderFullBoard(data.matrix);
+
+        if (data.combine && data.combine.length > 0) {
+            this._gameState = GameState.Resolving;
+            this._processCombine(data.combine);
+        } else {
+            this._gameState = GameState.Idle;
+            console.log('end turn');
+        }
     }
 
-    private _onAssetsLoaded (loaderInstance: PIXI.Loader, resources: Partial<Record<string, PIXI.LoaderResource>>): void {
+    private _onAssetsLoaded(loaderInstance: PIXI.Loader, resources: Partial<Record<string, PIXI.LoaderResource>>): void {
         /**
          * After loading process is finished this function will be called
          */
@@ -158,5 +194,43 @@ export class GameScene extends PIXI.Container {
             symbolTextures[type] = resources[`symbol_${type}`].texture;
         });
         this.init();
+    }
+
+    private _renderFullBoard(matrix: string[]): void {
+        this._currentMatrix = matrix;
+
+        matrix.forEach((sym, idx) => {
+            const spr = this._boardSprites[idx];
+            if (symbolTextures[sym]) {
+                spr.texture = symbolTextures[sym];
+                spr.alpha = 1;
+            } else {
+                spr.alpha = 0;
+            }
+        });
+    }
+
+    private _processCombine(combine: string[]) {
+        combine.forEach(entry => {
+            const [sym, posStr, score] = entry.split(";");
+            const indexes = posStr.split(",").map(n => parseInt(n));
+            indexes.forEach(idx => {
+                const spr = this._boardSprites[idx];
+                spr.alpha = 0.3;
+            });
+        });
+
+        setTimeout(() => {
+            combine.forEach(entry => {
+                const [sym, posStr, score] = entry.split(";");
+                const indexes = posStr.split(",").map(n => parseInt(n));
+                indexes.forEach(idx => {
+                    const spr = this._boardSprites[idx];
+                    spr.alpha = 0;
+                });
+            });
+
+            this._server.requestSpinData();
+        }, 500);
     }
 }
